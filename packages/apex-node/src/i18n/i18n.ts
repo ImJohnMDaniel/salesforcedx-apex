@@ -80,5 +80,7 @@ export const messages = {
   missingTestClassErr: 'Apex class %s does not exist in the org',
   testSuiteMsg: 'Apex test class %s already exists in Apex test suite %s',
   classSuiteMsg: `Added Apex class %s to your Apex test suite %s`,
-  debugLevelNotFound: `Debug Level not found for %s`
+  debugLevelNotFound: `Debug Level not found for %s`,
+  runIdFormatErr: 'Cannot specify a result format with a TestRunId result',
+  covIdFormatErr: 'Cannot specify code coverage with a TestRunId result'
 };

@@ -4,13 +4,21 @@
  * Licensed under the BSD 3-Clause license.
  * For full license text, see LICENSE.txt file in the repo root or https://opensource.org/licenses/BSD-3-Clause
  */
-import { Connection, SfdxError } from '@salesforce/core';
+import {
+  Connection,
+  Logger,
+  Org,
+  SfdxError,
+  StatusResult,
+  StreamingClient
+} from '@salesforce/core';
+import { Duration } from '@salesforce/kit';
 import { AnyJson } from '@salesforce/ts-types';
 import {
   DEFAULT_DEBUG_LEVEL_NAME,
-  LOG_TYPE,
   MAX_NUM_LOGS,
-  TAIL_LISTEN_TIMEOUT_MIN
+  LOG_TIMER_LENGTH_MINUTES,
+  LISTENER_ABORTED_ERROR_NAME
 } from './constants';
 import {
   ApexLogGetOptions,
@@ -19,16 +27,30 @@ import {
   LogResult
 } from './types';
 import * as path from 'path';
-import * as util from 'util';
 import { nls } from '../i18n';
+import * as util from 'util';
 import { createFile } from '../utils';
+import { TraceFlags } from '../utils/traceFlags';
 import { QueryResult } from '../utils/types';
+
+type StreamingLogMessage = {
+  sobject: { Id: string };
+};
+
+const STREAMING_LOG_TOPIC = '/systemTopic/Logging';
 
 export class LogService {
   public readonly connection: Connection;
+  private logger: Logger;
+  private org: Org;
+  private logTailer?: (log: string) => void;
 
   constructor(connection: Connection) {
     this.connection = connection;
+  }
+
+  public setOrg(org: Org): void {
+    this.org = org;
   }
 
   public async getLogIds(options: ApexLogGetOptions): Promise<string[]> {
@@ -78,16 +100,21 @@ export class LogService {
     });
   }
 
-  public async getLogById(logId: string): Promise<AnyJson> {
-    const url = `${this.connection.tooling._baseUrl()}/sobjects/ApexLog/${logId}/Body`;
+  public async getLogById(logId: string): Promise<LogResult> {
+    const baseUrl = this.connection.tooling._baseUrl();
+    const url = `${baseUrl}/sobjects/ApexLog/${logId}/Body`;
     const response = (await this.connection.tooling.request(url)) as AnyJson;
     return { log: response.toString() || '' };
   }
 
   public async getLogRecords(numberOfLogs?: number): Promise<LogRecord[]> {
-    let apexLogQuery =
-      'Select Id, Application, DurationMilliseconds, Location, LogLength, LogUser.Name, ' +
-      'Operation, Request, StartTime, Status from ApexLog Order By StartTime DESC';
+    let apexLogQuery = `
+        SELECT Id, Application, DurationMilliseconds, Location, LogLength, LogUser.Name,
+          Operation, Request, StartTime, Status
+        FROM ApexLog
+        ORDER BY StartTime DESC
+      `;
+
     if (typeof numberOfLogs === 'number') {
       if (numberOfLogs <= 0) {
         throw new Error(nls.localize('numLogsError'));
